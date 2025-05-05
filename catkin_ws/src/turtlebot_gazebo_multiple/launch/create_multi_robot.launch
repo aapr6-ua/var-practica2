@@ -11,7 +11,7 @@
     <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="use_sim_time" value="true"/>
     <arg name="debug" value="false"/>
-    <!-- <arg name="world_name" value="$(find turtlebot_gazebo_multiple)/launch/Actors_GrannyAnnie.world"/>-->
+    <!--  <arg name="world_name" value="$(find turtlebot_gazebo_multiple)/launch/Actors_GrannyAnnie.world"/> -->
     <arg name="world_name" value="$(find turtlebot_gazebo_multiple)/launch/race.sdf"/>
   </include>
 
@@ -20,7 +20,4 @@
 
   <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model" args="-urdf -model turtlebot3 -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -Y $(arg x_rot) -param robot_description" />
   
-  <!-- Detener movimiento inicial del robot -->
-  <node pkg="rostopic" type="rostopic" name="stop_robot_init" args="pub /cmd_vel geometry_msgs/Twist '{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}' -1" />
-
 </launch>
