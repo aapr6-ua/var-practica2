@@ -5,35 +5,41 @@ import os
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
-from std_msgs.msg import String
 import numpy as np
 
 class DataCollector:
     def __init__(self):
         rospy.init_node('data_collector')
 
-        # Prepare output directory and file
+        # Preparar directorio de salida y archivo
         self.output_dir = rospy.get_param('~output_dir', 'data')
         os.makedirs(self.output_dir, exist_ok=True)
-        self.csv_file = open(os.path.join(self.output_dir, 'dataset.csv'), 'w')
-        self.writer = csv.writer(self.csv_file)
-        # Header: ranges (360), linear_vel, angular_vel, cmd_lin, cmd_ang
-        header = [f'r{i}' for i in range(360)] + ['lin_vel', 'ang_vel', 'cmd_lin', 'cmd_ang']
-        self.writer.writerow(header)
 
-        # State storage
+        file_path = os.path.join(self.output_dir, 'dataset.csv')
+        file_exists = os.path.isfile(file_path)
+        is_empty = not file_exists or os.path.getsize(file_path) == 0
+
+        self.csv_file = open(file_path, 'a', newline='')
+        self.writer = csv.writer(self.csv_file)
+
+        # Escribir cabecera si el archivo está vacío
+        if is_empty:
+            header = [f'r{i}' for i in range(360)] + ['lin_vel', 'ang_vel', 'cmd_lin', 'cmd_ang']
+            self.writer.writerow(header)
+
+        # Almacenamiento del estado
         self.scan = None
         self.odom_lin = 0.0
         self.odom_ang = 0.0
         self.cmd_lin = 0.0
         self.cmd_ang = 0.0
 
-        # Subscribers
+        # Suscripciones
         rospy.Subscriber('/scan', LaserScan, self.scan_cb)
         rospy.Subscriber('/odom', Odometry, self.odom_cb)
         rospy.Subscriber('/cmd_vel', Twist, self.cmd_cb)
 
-        # Main loop
+        # Bucle principal
         self.rate = rospy.Rate(10)
         self.run()
 
