@@ -11,15 +11,14 @@ class DataCollector:
     def __init__(self):
         rospy.init_node('data_collector')
 
-        # Preparar directorio de salida y archivo
+        # Directorio de salida y archivo
         self.output_dir = rospy.get_param('~output_dir', 'data')
         os.makedirs(self.output_dir, exist_ok=True)
+        self.file_path = os.path.join(self.output_dir, 'dataset.csv')
+        file_exists = os.path.isfile(self.file_path)
+        is_empty = not file_exists or os.path.getsize(self.file_path) == 0
 
-        file_path = os.path.join(self.output_dir, 'dataset.csv')
-        file_exists = os.path.isfile(file_path)
-        is_empty = not file_exists or os.path.getsize(file_path) == 0
-
-        self.csv_file = open(file_path, 'a', newline='')
+        self.csv_file = open(self.file_path, 'a', newline='')
         self.writer = csv.writer(self.csv_file)
 
         # Escribir cabecera si el archivo está vacío
@@ -39,12 +38,13 @@ class DataCollector:
         rospy.Subscriber('/odom', Odometry, self.odom_cb)
         rospy.Subscriber('/cmd_vel', Twist, self.cmd_cb)
 
-        # Bucle principal
-        self.rate = rospy.Rate(10)
+        self.rate = rospy.Rate(15)
         self.run()
 
     def scan_cb(self, msg):
         self.scan = np.array(msg.ranges)
+        self.scan[self.scan == 0] = 10.0  # Reemplazo de ceros por valor máximo
+        self.scan = np.clip(self.scan, 0, 10.0)
 
     def odom_cb(self, msg):
         self.odom_lin = msg.twist.twist.linear.x
@@ -55,11 +55,14 @@ class DataCollector:
         self.cmd_ang = msg.angular.z
 
     def run(self):
-        rospy.loginfo("Starting data collection...")
+        rospy.loginfo("Iniciando recolección de datos...")
         while not rospy.is_shutdown():
             if self.scan is not None:
-                row = list(np.nan_to_num(self.scan, nan=10.0, posinf=10.0, neginf=0.0))
-                row += [self.odom_lin, self.odom_ang, self.cmd_lin, self.cmd_ang]
+                scan_processed = np.nan_to_num(self.scan, nan=10.0, posinf=10.0, neginf=0.0)
+                scan_processed += np.random.normal(0, 0.02, scan_processed.shape)
+                scan_processed = np.clip(scan_processed, 0, 10.0)
+
+                row = list(scan_processed) + [self.odom_lin, self.odom_ang, self.cmd_lin, self.cmd_ang]
                 self.writer.writerow(row)
             self.rate.sleep()
 
