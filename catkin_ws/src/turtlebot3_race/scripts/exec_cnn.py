@@ -5,131 +5,158 @@ import numpy as np
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 import os
-import sys
-from sklearn.preprocessing import StandardScaler
+from scipy.signal import medfilt
 
-# Agregamos la implementación actualizada de CNNController directamente aquí para evitar
-# problemas de importación con el módulo train_cnn
-
-class CNNController(torch.nn.Module):
-    def __init__(self, dropout_rate=0.2):
-        super(CNNController, self).__init__()
-        
-        # Capas convolucionales con BatchNorm y Dropout
-        self.conv = torch.nn.Sequential(
-            # Primera capa convolucional
-            torch.nn.Conv1d(1, 32, kernel_size=5, stride=2, padding=2),
-            torch.nn.BatchNorm1d(32),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(dropout_rate),
-            
-            # Segunda capa convolucional
-            torch.nn.Conv1d(32, 64, kernel_size=5, stride=2, padding=2),
-            torch.nn.BatchNorm1d(64),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(dropout_rate),
-            
-            # Tercera capa convolucional
-            torch.nn.Conv1d(64, 128, kernel_size=5, stride=2, padding=2),
-            torch.nn.BatchNorm1d(128),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(dropout_rate),
-        )
-        
-        # Calcular tamaño de salida de la capa convolucional para el input
-        with torch.no_grad():
-            dummy_input = torch.zeros(1, 1, 360)
-            dummy_output = self.conv(dummy_input)
-            conv_output_size = dummy_output.size(1) * dummy_output.size(2)
-        
-        # Capas fully connected
-        self.fc = torch.nn.Sequential(
-            torch.nn.Linear(conv_output_size, 256),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(dropout_rate),
-            torch.nn.Linear(256, 128),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(dropout_rate),
-            torch.nn.Linear(128, 2)  # Salida: velocidad lineal y angular
-        )
+class TurtlebotCNN(torch.nn.Module):
+    def __init__(self, dropout_rate=0.3):
+        super(TurtlebotCNN, self).__init__()
+        self.conv1 = torch.nn.Conv1d(1, 16, kernel_size=5, padding=2)
+        self.bn1 = torch.nn.BatchNorm1d(16)
+        self.conv2 = torch.nn.Conv1d(16, 32, kernel_size=5, padding=2)
+        self.bn2 = torch.nn.BatchNorm1d(32)
+        self.conv3 = torch.nn.Conv1d(32, 64, kernel_size=5, padding=2)
+        self.bn3 = torch.nn.BatchNorm1d(64)
+        self.pool = torch.nn.MaxPool1d(2)
+        self.fc1 = torch.nn.Linear(64 * 45, 128)
+        self.dropout = torch.nn.Dropout(dropout_rate)
+        self.fc2 = torch.nn.Linear(128, 64)
+        self.fc3 = torch.nn.Linear(64, 2)
 
     def forward(self, x):
-        x = self.conv(x)
+        x = torch.relu(self.bn1(self.conv1(x)))
+        x = self.pool(x)
+        x = torch.relu(self.bn2(self.conv2(x)))
+        x = self.pool(x)
+        x = torch.relu(self.bn3(self.conv3(x)))
+        x = self.pool(x)
         x = x.view(x.size(0), -1)
-        return self.fc(x)
+        x = torch.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = torch.relu(self.fc2(x))
+        return self.fc3(x)
 
-class CNNExecutor:
+class CNNController:
     def __init__(self):
-        rospy.init_node('cnn_executor')
+        rospy.init_node('cnn_controller')
         
-        # Cargar modelo y escalador
+        # Cargar parámetros
         model_path = rospy.get_param('~model_path', 'model.pt')
+        self.max_range = rospy.get_param('~max_range', 10.0)
+        self.max_lin_vel = rospy.get_param('~max_lin_vel', 0.5)  # m/s
+        self.max_ang_vel = rospy.get_param('~max_ang_vel', 1.5)  # rad/s
+        self.control_rate = rospy.get_param('~control_rate', 10)  # Hz
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        # Cargar modelo
         rospy.loginfo(f"Cargando modelo desde: {model_path}")
+        self.model = self.load_model(model_path)
         
+        # Publicadores y suscriptores
+        self.cmd_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
+        self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
+        
+        # Variables de estado
+        self.latest_scan = None
+        self.running = True
+        
+        rospy.loginfo("CNN Controller inicializado")
+        
+    def load_model(self, model_path):
+        """Cargar modelo desde archivo"""
         try:
-            # Cargar el checkpoint que contiene el modelo y el escalador
-            checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+            # Comprobar si existe el archivo
+            if not os.path.exists(model_path):
+                rospy.logerr(f"El archivo de modelo no existe: {model_path}")
+                return None
+                
+            # Cargar modelo
+            checkpoint = torch.load(model_path, map_location=self.device)
             
-            # Crear e inicializar el modelo
-            self.model = CNNController()
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.model.eval()
+            # Inicializar modelo
+            model = TurtlebotCNN().to(self.device)
             
-            # Cargar el escalador
-            self.scaler = checkpoint['scaler']
-            
-            rospy.loginfo("Modelo y escalador cargados correctamente")
+            # Cargar estado del modelo
+            if 'model_state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                model.load_state_dict(checkpoint)
+                
+            model.eval()  # Establecer en modo evaluación
+            rospy.loginfo(f"Modelo cargado correctamente en {self.device}")
+            return model
         except Exception as e:
-            rospy.logerr(f"Error al cargar el modelo: {str(e)}")
-            raise e
-
-        # Publisher y Subscriber
-        self.pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
-        rospy.Subscriber('/scan', LaserScan, self.scan_cb)
-        self.scan = None
-        self.rate = rospy.Rate(10)
-
-    def scan_cb(self, msg):
-        # Convertir datos del LiDAR a numpy array
-        arr = np.array(msg.ranges)
+            rospy.logerr(f"Error al cargar el modelo: {e}")
+            return None
+    
+    def scan_callback(self, msg):
+        """Callback para los datos del escáner láser"""
+        ranges = np.array(msg.ranges)
         
-        # Reemplazar valores no numéricos
-        arr = np.nan_to_num(arr, nan=10.0, posinf=10.0, neginf=0.0)
+        # Procesar datos inválidos
+        ranges[np.isinf(ranges)] = self.max_range
+        ranges[np.isnan(ranges)] = self.max_range
+        ranges[ranges == 0] = self.max_range
         
-        # Normalizar datos usando el escalador entrenado
-        arr_2d = arr.reshape(1, -1)  # Reshape para el escalador
-        arr_normalized = self.scaler.transform(arr_2d)
-        arr_normalized = arr_normalized.flatten()  # Volver a 1D
+        # Limitar rango
+        ranges = np.clip(ranges, 0.0, self.max_range)
         
-        # Convertir a tensor para el modelo
-        self.scan = torch.tensor(arr_normalized, dtype=torch.float32).view(1, 1, -1)
-
-    def run(self):
-        rospy.loginfo("Iniciando la ejecución del modelo CNN...")
-        while not rospy.is_shutdown():
-            if self.scan is not None:
-                try:
-                    with torch.no_grad():
-                        cmd = self.model(self.scan).squeeze().numpy()
-                    
-                    # Crear mensaje Twist con las velocidades predichas
-                    twist = Twist()
-                    twist.linear.x = float(cmd[0])
-                    twist.angular.z = float(cmd[1])
-                    
-                    # Publicar el comando de velocidad
-                    self.pub.publish(twist)
-                    
-                except Exception as e:
-                    rospy.logerr(f"Error en inferencia del modelo: {str(e)}")
+        self.latest_scan = ranges
+    
+    def preprocess_scan(self, scan):
+        """Preprocesamiento del escaneo láser para la CNN"""
+        # Aplicar filtro de mediana para reducir ruido
+        scan_filtered = medfilt(scan, kernel_size=3)
+        
+        # Normalizar al rango [0,1]
+        scan_normalized = scan_filtered / self.max_range
+        
+        # Convertir a tensor y dar formato para CNN
+        scan_tensor = torch.FloatTensor(scan_normalized).reshape(1, 1, -1)
+        return scan_tensor.to(self.device)
+    
+    def predict_velocity(self, scan):
+        """Predecir comandos de velocidad a partir del escaneo láser"""
+        if self.model is None:
+            rospy.logerr("El modelo no está cargado, no se pueden hacer predicciones")
+            return 0.0, 0.0
             
-            self.rate.sleep()
+        with torch.no_grad():
+            scan_tensor = self.preprocess_scan(scan)
+            output = self.model(scan_tensor)
+            lin_vel, ang_vel = output[0].cpu().numpy()
+            
+        # Limitar velocidades
+        lin_vel = np.clip(lin_vel, -self.max_lin_vel, self.max_lin_vel)
+        ang_vel = np.clip(ang_vel, -self.max_ang_vel, self.max_ang_vel)
+        
+        return lin_vel, ang_vel
+    
+    def run(self):
+        """Bucle principal de control"""
+        rate = rospy.Rate(self.control_rate)
+        
+        rospy.loginfo("Iniciando control del robot...")
+        
+        while not rospy.is_shutdown() and self.running:
+            if self.latest_scan is not None:
+                # Predecir velocidades
+                lin_vel, ang_vel = self.predict_velocity(self.latest_scan)
+                
+                # Publicar comando de velocidad
+                cmd_msg = Twist()
+                cmd_msg.linear.x = lin_vel
+                cmd_msg.angular.z = ang_vel
+                self.cmd_pub.publish(cmd_msg)
+                
+                # Log ocasional (cada 50 iteraciones)
+                if rospy.get_time() % 5 < 0.1:
+                    rospy.loginfo(f"Velocidad: lin={lin_vel:.2f} m/s, ang={ang_vel:.2f} rad/s")
+            
+            rate.sleep()
 
 if __name__ == '__main__':
     try:
-        executor = CNNExecutor()
-        executor.run()
+        controller = CNNController()
+        controller.run()
     except rospy.ROSInterruptException:
         pass
-    except Exception as e:
-        rospy.logerr(f"Error general: {str(e)}")
