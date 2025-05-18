@@ -2,7 +2,7 @@
 import rospy
 import torch
 import numpy as np
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Imu
 from geometry_msgs.msg import Twist
 import os
 from scipy.signal import medfilt
@@ -53,6 +53,7 @@ class CNNController:
         
         # Publicadores y suscriptores
         self.cmd_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
+        self.imu_pub = rospy.Publisher('/imu', Imu, queue_size=1)  # Nuevo: publicar en /imu
         self.scan_sub = rospy.Subscriber('/scan', LaserScan, self.scan_callback)
         
         # Variables de estado
@@ -147,6 +148,24 @@ class CNNController:
                 cmd_msg.linear.x = lin_vel
                 cmd_msg.angular.z = ang_vel
                 self.cmd_pub.publish(cmd_msg)
+                
+                # Publicar velocidad angular en /imu
+                imu_msg = Imu()
+                imu_msg.header.stamp = rospy.Time.now()
+                imu_msg.header.frame_id = "base_link"
+                
+                # Configurar velocidad angular (solo en el eje Z para yaw)
+                imu_msg.angular_velocity.x = 0.0
+                imu_msg.angular_velocity.y = 0.0
+                imu_msg.angular_velocity.z = ang_vel
+                
+                # Establecer covarianzas como matrices de identidad
+                imu_msg.orientation_covariance = [0.01 if i == 0 or i == 4 or i == 8 else 0.0 for i in range(9)]
+                imu_msg.angular_velocity_covariance = [0.01 if i == 0 or i == 4 or i == 8 else 0.0 for i in range(9)]
+                imu_msg.linear_acceleration_covariance = [0.01 if i == 0 or i == 4 or i == 8 else 0.0 for i in range(9)]
+                
+                # Publicar mensaje de IMU
+                self.imu_pub.publish(imu_msg)
                 
                 # Log ocasional (cada 50 iteraciones)
                 if rospy.get_time() % 5 < 0.1:

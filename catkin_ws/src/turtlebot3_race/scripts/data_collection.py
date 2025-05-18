@@ -3,7 +3,7 @@ import rospy
 import csv
 import os
 import numpy as np
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Imu
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from datetime import datetime
@@ -30,7 +30,7 @@ class DataCollector:
         # Variables para almacenar el estado
         self.scan = None
         self.odom_lin = 0.0
-        self.odom_ang = 0.0
+        self.imu_ang = 0.0  # Cambio: usar IMU para velocidad angular
         self.cmd_lin = 0.0
         self.cmd_ang = 0.0
         self.last_save_time = rospy.Time.now()
@@ -38,7 +38,8 @@ class DataCollector:
 
         # Suscripciones
         rospy.Subscriber('/scan', LaserScan, self.scan_cb)
-        rospy.Subscriber('/odom', Odometry, self.odom_cb)
+        rospy.Subscriber('/odom', Odometry, self.odom_cb)  # Mantener para velocidad lineal
+        rospy.Subscriber('/imu', Imu, self.imu_cb)  # Nuevo: obtener velocidad angular del IMU
         rospy.Subscriber('/cmd_vel', Twist, self.cmd_cb)
 
         # Publicar información de estado
@@ -62,9 +63,14 @@ class DataCollector:
         self.scan = np.clip(ranges, 0.0, 10.0)
 
     def odom_cb(self, msg):
-        """Callback para la odometría"""
+        """Callback para la odometría (solo velocidad lineal)"""
         self.odom_lin = msg.twist.twist.linear.x
-        self.odom_ang = msg.twist.twist.angular.z
+        # Ya no obtenemos la velocidad angular de aquí
+
+    def imu_cb(self, msg):
+        """Callback para el IMU (velocidad angular)"""
+        # Obtenemos la velocidad angular del eje Z (yaw) del IMU
+        self.imu_ang = msg.angular_velocity.z
 
     def cmd_cb(self, msg):
         """Callback para comandos de velocidad"""
@@ -84,8 +90,8 @@ class DataCollector:
                     scan_processed = self.scan + np.random.normal(0, 0.01, self.scan.shape)
                     scan_processed = np.clip(scan_processed, 0.0, 10.0)
                     
-                    # Guardar datos
-                    row = list(scan_processed) + [self.odom_lin, self.odom_ang, self.cmd_lin, self.cmd_ang]
+                    # Guardar datos (usar imu_ang en lugar de odom_ang)
+                    row = list(scan_processed) + [self.odom_lin, self.imu_ang, self.cmd_lin, self.cmd_ang]
                     self.writer.writerow(row)
                     saved_count += 1
                     

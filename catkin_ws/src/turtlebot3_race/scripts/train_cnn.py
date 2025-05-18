@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, ConcatDataset
 import numpy as np
 import csv
 import os
+import glob
 import matplotlib.pyplot as plt
 from scipy.signal import medfilt
 import argparse
@@ -61,6 +62,49 @@ class LaserDataset(Dataset):
         scan_normalized = scan_filtered / self.max_range
         
         return scan_normalized
+
+def load_all_datasets(data_dir, max_range=10.0):
+    """
+    Carga todos los datasets que comienzan con 'dataset_' en la carpeta de datos
+    
+    Args:
+        data_dir: Ruta a la carpeta que contiene los datasets
+        max_range: Rango máximo del láser para normalización
+        
+    Returns:
+        Un ConcatDataset que contiene todos los datasets combinados
+    """
+    # Buscar todos los archivos que comienzan con 'dataset_' en la carpeta especificada
+    dataset_pattern = os.path.join(data_dir, "dataset_*.csv")
+    dataset_files = glob.glob(dataset_pattern)
+    
+    if not dataset_files:
+        raise ValueError(f"No se encontraron archivos 'dataset_*.csv' en {data_dir}")
+    
+    print(f"Se encontraron {len(dataset_files)} archivos de dataset:")
+    for file in dataset_files:
+        print(f"  - {os.path.basename(file)}")
+    
+    # Cargar cada dataset y añadirlo a la lista
+    datasets = []
+    total_samples = 0
+    
+    for file_path in dataset_files:
+        try:
+            dataset = LaserDataset(file_path, max_range)
+            datasets.append(dataset)
+            total_samples += len(dataset)
+        except Exception as e:
+            print(f"Error al cargar {file_path}: {e}")
+    
+    if not datasets:
+        raise ValueError("No se pudo cargar ningún dataset correctamente")
+    
+    # Combinar todos los datasets
+    combined_dataset = ConcatDataset(datasets)
+    print(f"Dataset combinado: {total_samples} muestras totales")
+    
+    return combined_dataset
 
 class TurtlebotCNN(nn.Module):
     def __init__(self, dropout_rate=0.3):
@@ -286,7 +330,7 @@ def plot_predictions(predictions, targets, save_path=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Entrenar CNN para control de Turtlebot')
-    parser.add_argument('--data', type=str, default='data/dataset.csv', help='Ruta al archivo CSV de datos')
+    parser.add_argument('--data_dir', type=str, default='data', help='Directorio que contiene los archivos CSV de datos')
     parser.add_argument('--epochs', type=int, default=50, help='Número de épocas de entrenamiento')
     parser.add_argument('--batch', type=int, default=64, help='Tamaño de batch')
     parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate inicial')
@@ -303,8 +347,12 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Usando dispositivo: {device}")
     
-    # Cargar dataset
-    dataset = LaserDataset(args.data)
+    # Cargar todos los datasets
+    try:
+        dataset = load_all_datasets(args.data_dir)
+    except ValueError as e:
+        print(f"Error: {e}")
+        exit(1)
     
     # Dividir en conjuntos de entrenamiento, validación y prueba
     train_size = int(0.7 * len(dataset))
