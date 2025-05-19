@@ -1,7 +1,6 @@
-<!-- Este archivo contiene la configuración para el controlador CNN-YOLO -->
 <launch>
-  <!-- Cargar parámetros -->
-  <arg name="cnn_model_path" default="models/model.pt"/>
+  <!-- Cargar parametros -->
+  <arg name="cnn_model_path" default="$(find turtlebot3_race)/models/model.pt"/>
   <arg name="yolo_model" default="yolov5s"/>
   <arg name="yolo_confidence" default="0.5"/>
   <arg name="camera_topic" default="/camera/rgb/image_raw"/>
@@ -9,8 +8,9 @@
   <arg name="max_lin_vel" default="0.5"/>
   <arg name="max_ang_vel" default="1.5"/>
   <arg name="control_rate" default="10"/>
-  <!-- Iniciar nodo de control CNN-YOLO -->
-  <node name="cnn_yolo_controller" pkg="turtlebot3_race" type="exec_cnn_yolo.py" output="screen">
+
+  <!-- Nodo de control -->
+  <node name="cnn_yolo_controller" pkg="turtlebot3_race" type="exec_cnn.py" output="screen">
     <param name="cnn_model_path" value="$(arg cnn_model_path)"/>
     <param name="yolo_model" value="$(arg yolo_model)"/>
     <param name="yolo_confidence" value="$(arg yolo_confidence)"/>
@@ -20,7 +20,7 @@
     <param name="max_ang_vel" value="$(arg max_ang_vel)"/>
     <param name="control_rate" value="$(arg control_rate)"/>
   </node>
-  <!-- Visualizar la imagen con las detecciones -->
+  
   <node name="image_view" pkg="image_view" type="image_view" respawn="false" output="screen">
     <remap from="image" to="/detection_image"/>
     <param name="autosize" value="true"/>
